@@ -1,0 +1,46 @@
+---
+- name: Resize the "{{ hub_qcow }}" image
+  ansible.builtin.shell: qemu-img resize "{{ hub_qcow }}" +"{{ resized_hub_qcow_disk_size }}"
+
+- name: Resize the partition 4 of "{{ hub_qcow }}" image
+  ansible.builtin.shell: virt-customize -a "{{ hub_qcow }}" --run-command 'growpart /dev/sda 4'
+
+- name: Increase the filesystem on / of "{{ hub_qcow }}" image
+  ansible.builtin.shell: virt-customize -a "{{ hub_qcow }}" --run-command 'xfs_growfs /'
+
+- name: Set the root user password for "{{ hub_qcow }}" image
+  ansible.builtin.shell: virt-customize -a "{{ hub_qcow }}" --root-password password:redhat
+
+- name: Disable the cloud-init service in "{{ hub_qcow }}" image
+  ansible.builtin.shell: virt-customize -a "{{ hub_qcow }}" --run-command 'systemctl disable cloud-init'
+
+- name: Inject the root user’s public RSA key in "{{ hub_qcow }}" image
+  ansible.builtin.shell: virt-customize -a "{{ hub_qcow }}" --ssh-inject root:file:/root/.ssh/id_rsa.pub
+
+- name: SELinux relabel in "{{ hub_qcow }}" image
+  ansible.builtin.shell: virt-customize -a "{{ hub_qcow }}" --selinux-relabel
+
+- name: Create the image for hub VM using the "{{ hub_qcow }}" image
+  ansible.builtin.shell: qemu-img create -f qcow2 -F qcow2 -b "{{ hub_qcow }}" "{{ resized_hub_qcow }}"
+
+- name: Create the hub VM
+  ansible.builtin.shell:
+    cmd: "virt-install --virt-type kvm --ram {{ hub_memory }} --vcpus {{ hub_vcpu }} \
+        --cpu=host-passthrough --os-variant {{ hub_os_varient }} --name {{ hub_name }} \
+        --disk path={{ resized_hub_qcow }},device=disk,bus=virtio,format=qcow2 \
+        --disk path={{ cluster_vms_storage_base_dir }}/{{ hub_disk_name }},device=disk,bus=virtio,format=qcow2,size={{ hub_disk_size }} \
+        --network bridge={{ libvirt_bridge_name }},mac={{ hub_mac }} --boot hd,network --noautoconsole \
+        --vnc --noreboot"
+
+- name: Start the hub VM
+  ansible.builtin.shell: virsh start hub
+
+- name: Create the directory and file structure
+  ansible.builtin.command: "{{ item }}"
+  loop:
+    - mkdir /root/hub
+    - mkdir /root/.kube
+    - touch /root/.kube/config
+    - touch /root/hub/kubeadmin-password
+    - touch /root/hub/console-url
+    - touch /root/hub/kubeconfig
